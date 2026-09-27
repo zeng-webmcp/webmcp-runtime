@@ -20,6 +20,7 @@ import {
   getBootSessionId,
   getLoginSessionId,
   loadElevatedLease,
+  DEFAULT_ELEVATED_LEASE_MS,
   MAX_ELEVATED_LEASE_MS,
   parseElevatedDuration,
   persistElevatedLease,
@@ -227,7 +228,7 @@ export async function localInstanceStatus({
 
 export async function grantLocalInstanceAccess({
   context,
-  durationMs = MAX_ELEVATED_LEASE_MS,
+  durationMs = DEFAULT_ELEVATED_LEASE_MS,
   execFileImpl = execFileAsync,
   platform = 'darwin',
   now = null,

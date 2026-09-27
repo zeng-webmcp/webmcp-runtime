@@ -2,9 +2,9 @@ import { execFile } from 'node:child_process';
 import os from 'node:os';
 import { promisify } from 'node:util';
 import { InstallerError } from './installer-error.js';
+import { MAX_ELEVATED_LEASE_MS } from './elevated-access.js';
 
 const execFileAsync = promisify(execFile);
-const MAX_ELEVATED_LEASE_MS = 60 * 60 * 1000;
 
 function fail(message, code, options = {}) {
   throw new InstallerError(message, code, options);

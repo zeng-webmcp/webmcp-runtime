@@ -12,7 +12,8 @@ const execFileAsync = promisify(execFile);
 // changes the container. Version 1 leases (Full Working Access, removed) no longer parse.
 export const HOST_ACCESS_LEASE_VERSION = 2;
 export const FULL_HOST_ACCESS_LEVEL = 'full-host';
-export const MAX_ELEVATED_LEASE_MS = 60 * 60 * 1000;
+export const DEFAULT_ELEVATED_LEASE_MS = 60 * 60 * 1000;
+export const MAX_ELEVATED_LEASE_MS = 8 * 60 * 60 * 1000;
 const LEASE_ID_PATTERN = /^[0-9a-f]{64}$/;
 const INSTANCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -55,7 +56,7 @@ export function parseElevatedDuration(value = '60m') {
   const amount = Number(match[1]);
   const durationMs = amount * (match[2] === 'h' ? 60 * 60 * 1000 : 60 * 1000);
   if (!Number.isSafeInteger(durationMs) || durationMs <= 0 || durationMs > MAX_ELEVATED_LEASE_MS) {
-    fail('Elevated duration must be greater than zero and no longer than 1 hour.', 'INVALID_ELEVATED_DURATION');
+    fail('Elevated duration must be greater than zero and no longer than 8 hours.', 'INVALID_ELEVATED_DURATION');
   }
   return durationMs;
 }
@@ -112,7 +113,7 @@ export function createElevatedLease({
   elevatedRoot,
   bootSessionId,
   loginSessionId,
-  durationMs = MAX_ELEVATED_LEASE_MS,
+  durationMs = DEFAULT_ELEVATED_LEASE_MS,
   now = Date.now(),
   leaseId = randomBytes(32).toString('hex'),
   platform = process.platform,
@@ -135,7 +136,7 @@ export function createElevatedLease({
     fail('Elevated lease issue time is invalid.', 'INVALID_ELEVATED_LEASE');
   }
   if (!Number.isSafeInteger(durationMs) || durationMs <= 0 || durationMs > MAX_ELEVATED_LEASE_MS) {
-    fail('Elevated lease lifetime must be greater than zero and no longer than 1 hour.', 'INVALID_ELEVATED_DURATION');
+    fail('Elevated lease lifetime must be greater than zero and no longer than 8 hours.', 'INVALID_ELEVATED_DURATION');
   }
   if (!INSTANCE_ID_PATTERN.test(instanceId)) {
     fail('Full Host lease instance identity is invalid.', 'INVALID_ELEVATED_LEASE');
