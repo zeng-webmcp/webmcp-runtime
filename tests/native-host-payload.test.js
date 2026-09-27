@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   NATIVE_HOST_ENTRYPOINT,
   NATIVE_HOST_RUNTIME_PAYLOAD,
@@ -36,6 +36,23 @@ test('immutable shared host payload is dependency-complete for the host entrypoi
     assert.equal(code, 1);
     assert.doesNotMatch(stderr, /ERR_MODULE_NOT_FOUND|Cannot find module/);
     assert.match(stderr, /Native WebMCP host boundary failed:/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('immutable shared host payload also imports the local instance controller used by Extension control', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'webmcp-shared-host-controller-'));
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  try {
+    for (const relativePath of NATIVE_HOST_RUNTIME_PAYLOAD) {
+      const destination = path.join(root, relativePath);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await copyFile(path.join(repo, relativePath), destination);
+    }
+
+    const controller = path.join(root, 'native/deploy/local-instance-controller.js');
+    await import(pathToFileURL(controller).href + '?payload-test=' + Date.now());
   } finally {
     await rm(root, { recursive: true, force: true });
   }

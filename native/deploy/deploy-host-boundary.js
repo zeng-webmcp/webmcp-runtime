@@ -33,8 +33,11 @@ export const NATIVE_HOST_RUNTIME_PAYLOAD = Object.freeze([
   'native/deploy/installer-error.js',
   'native/deploy/local-approval.js',
   'native/deploy/instance-transition.js',
+  'native/deploy/configure-workspace.js',
+  'native/deploy/local-instance-controller.js',
   'native/deploy/workspace-config.js',
   'native/deploy/workspace-mount-config.js',
+  'native/deploy/workspace-mount-transition.js',
   // The image source ships in the same release so one pinned artifact id also fixes
   // the Docker image an installer builds, without a Git checkout on the tester machine.
   'native/deploy/build-image.js',
