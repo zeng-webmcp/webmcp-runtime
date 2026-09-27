@@ -23,6 +23,7 @@ export function hostPathEnvironment(paths) {
     WEBMCP_NATIVE_IMAGE_PIN: paths.imagePin,
     WEBMCP_ELEVATED_LEASE: paths.elevatedLease,
     WEBMCP_OWNER_HOME: paths.home,
+    ...(paths.instanceId ? { WEBMCP_INSTANCE_ID: paths.instanceId } : {}),
     ...(paths.containerName && paths.containerName !== NATIVE_CONTAINER_NAME
       ? {
         WEBMCP_NATIVE_CONTAINER: paths.containerName,

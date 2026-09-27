@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { lstat, realpath, rm } from 'node:fs/promises';
+import { lstat, readdir, realpath, rm } from 'node:fs/promises';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
@@ -531,15 +532,57 @@ export async function setLocalInstanceMountedFolderWrite({
   });
 }
 
+async function configFileExists(filePath) {
+  try {
+    const info = await lstat(filePath);
+    return info.isFile() && !info.isSymbolicLink();
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+export async function listWebMcpInstances({ home } = {}) {
+  const defaultContext = createInstanceContext({ ...(home ? { home } : {}), instanceId: DEFAULT_INSTANCE_ID });
+  const instances = [];
+  if (await configFileExists(defaultContext.workspaceConfig)) {
+    instances.push(Object.freeze({ id: DEFAULT_INSTANCE_ID, isDefault: true }));
+  }
+
+  const instancesRoot = path.join(defaultContext.globalConfigRoot, 'instances');
+  let entries = [];
+  try {
+    entries = await readdir(instancesRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory()) continue;
+    let id;
+    try {
+      id = normalizeInstanceId(entry.name);
+    } catch {
+      continue;
+    }
+    if (id === DEFAULT_INSTANCE_ID) continue;
+    const context = createInstanceContext({ home: defaultContext.home, instanceId: id });
+    if (await configFileExists(context.workspaceConfig)) {
+      instances.push(Object.freeze({ id, isDefault: false }));
+    }
+  }
+  return Object.freeze({ instances: Object.freeze(instances) });
+}
+
 export function parseLocalInstanceControlArgs(argv) {
   const command = argv[0];
-  if (!['mount-list', 'mount-add', 'mount-remove', 'mount-write', 'access-status', 'host-access-grant', 'access-revoke'].includes(command)) {
+  if (!['instance-list', 'mount-list', 'mount-add', 'mount-remove', 'mount-write', 'access-status', 'host-access-grant', 'access-revoke'].includes(command)) {
     fail(
-      'Expected one command: mount-list, mount-add, mount-remove, mount-write, access-status, host-access-grant, access-revoke.',
+      'Expected one command: instance-list, mount-list, mount-add, mount-remove, mount-write, access-status, host-access-grant, access-revoke.',
       'INVALID_LOCAL_INSTANCE_ARGUMENTS',
     );
   }
   const allowedOptions = {
+    'instance-list': new Set(),
     'mount-list': new Set(['--instance']),
     'mount-add': new Set(['--instance', '--root']),
     'mount-remove': new Set(['--instance', '--id']),
@@ -571,7 +614,7 @@ export function parseLocalInstanceControlArgs(argv) {
       options.writeEnabled = arg === '--on';
     }
   }
-  if (!options.instanceId || options.instanceId === DEFAULT_INSTANCE_ID) {
+  if (command !== 'instance-list' && (!options.instanceId || options.instanceId === DEFAULT_INSTANCE_ID)) {
     fail('Local instance control requires a non-default --instance <id>.', 'INVALID_LOCAL_INSTANCE_ARGUMENTS');
   }
   return Object.freeze({ command, options: Object.freeze(options) });
@@ -582,7 +625,9 @@ async function localInstanceControlMain() {
     const parsed = parseLocalInstanceControlArgs(process.argv.slice(2));
     const context = createInstanceContext({ instanceId: parsed.options.instanceId });
     let result;
-    if (parsed.command === 'mount-list') {
+    if (parsed.command === 'instance-list') {
+      result = await listWebMcpInstances();
+    } else if (parsed.command === 'mount-list') {
       result = await localInstanceMountedFolders({ context });
     } else if (parsed.command === 'mount-add') {
       result = await addLocalInstanceMountedFolder({ context, root: parsed.options.root });

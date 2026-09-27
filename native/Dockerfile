@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Build with an immutable base, for example:
 #   docker build --build-arg WEBMCP_NODE_IMAGE=node:22-bookworm-slim@sha256:<digest> ...
 ARG WEBMCP_NODE_IMAGE

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -60,7 +62,7 @@ async function materializeReviewedContext(source, contextRoot) {
   }
 }
 
-function parseImageInspect(text, expectedSourceSha256) {
+function parseImageInspect(text, expectedSourceSha256, { expectedImageId = null, expectedArchitecture = null } = {}) {
   let parsed;
   try {
     parsed = JSON.parse(text);
@@ -72,14 +74,20 @@ function parseImageInspect(text, expectedSourceSha256) {
   }
   const image = parsed[0];
   if (typeof image.Id !== 'string' || !/^sha256:[0-9a-f]{64}$/i.test(image.Id)) {
-    fail('Built Native image does not have an immutable sha256 image ID.', 'INVALID_IMAGE_ID');
+    fail('Native image does not have an immutable sha256 image ID.', 'INVALID_IMAGE_ID');
+  }
+  if (expectedImageId && image.Id.toLowerCase() !== expectedImageId.toLowerCase()) {
+    fail('Loaded Native image does not match its pinned image ID.', 'IMAGE_ID_MISMATCH');
+  }
+  if (expectedArchitecture && image.Architecture !== expectedArchitecture) {
+    fail('Loaded Native image architecture does not match this release.', 'IMAGE_ARCHITECTURE_MISMATCH');
   }
   const sourceLabel = image?.Config?.Labels?.['com.webmcp.native.source-sha256'];
   if (sourceLabel !== expectedSourceSha256) {
-    fail('Built Native image source label does not match the reviewed payload.', 'IMAGE_SOURCE_MISMATCH');
+    fail('Native image source label does not match the reviewed payload.', 'IMAGE_SOURCE_MISMATCH');
   }
   if (image?.Config?.User !== '65532:65532') {
-    fail('Built Native image must remain non-root by default.', 'IMAGE_RUNTIME_IDENTITY_MISMATCH');
+    fail('Native image must remain non-root by default.', 'IMAGE_RUNTIME_IDENTITY_MISMATCH');
   }
   return image.Id.toLowerCase();
 }
@@ -156,6 +164,116 @@ export async function buildNativeImageFromRelease({
     tag,
     dockerBin,
     execFileImpl,
+  });
+}
+
+async function sha256File(filePath) {
+  const digest = createHash('sha256');
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath);
+    stream.on('data', (chunk) => digest.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', resolve);
+  });
+  return digest.digest('hex');
+}
+
+// Install-side path: the complete Runtime image is already built and reviewed by the
+// release process. The tester machine only verifies, loads and pins it.
+export async function loadNativeImageFromRelease({
+  releaseDir,
+  expectedArtifactId,
+  imageArchive,
+  imageArchiveSha256,
+  expectedImageId,
+  expectedArchitecture,
+  outputPin,
+  tag,
+  dockerBin = 'docker',
+  execFileImpl = execFileAsync,
+} = {}) {
+  if (typeof outputPin !== 'string' || !path.isAbsolute(outputPin) || outputPin === DEFAULT_IMAGE_PIN) {
+    fail('An instance-owned absolute image pin path is required.', 'INVALID_IMAGE_PIN_PATH');
+  }
+  if (typeof tag !== 'string' || tag.length === 0 || /[\r\n\0]/.test(tag) || tag === DEFAULT_TAG) {
+    fail('An instance-owned image tag is required.', 'INVALID_IMAGE_TAG');
+  }
+  if (typeof imageArchive !== 'string' || !path.isAbsolute(imageArchive)) {
+    fail('Runtime image archive must be an absolute path.', 'INVALID_IMAGE_ARCHIVE');
+  }
+  if (typeof imageArchiveSha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(imageArchiveSha256)) {
+    fail('Runtime image archive SHA256 is invalid.', 'INVALID_IMAGE_ARCHIVE_SHA256');
+  }
+  if (typeof expectedImageId !== 'string' || !/^sha256:[0-9a-f]{64}$/i.test(expectedImageId)) {
+    fail('Expected Runtime image ID is invalid.', 'INVALID_IMAGE_ID');
+  }
+  if (!['arm64', 'amd64'].includes(expectedArchitecture)) {
+    fail('Expected Runtime image architecture is invalid.', 'INVALID_IMAGE_ARCHITECTURE');
+  }
+
+  const { manifest } = await verifyRelease(releaseDir, {
+    expectedArtifactId,
+    entrypoint: NATIVE_HOST_ENTRYPOINT,
+  });
+  const runtimeFiles = NATIVE_RUNTIME_PAYLOAD.map((relativePath) => {
+    const entry = manifest.files.find((file) => file.path === relativePath);
+    if (!entry) fail(`Release does not ship image source ${relativePath}.`, 'MISSING_RUNTIME_SOURCE');
+    return entry;
+  });
+  const runtimeSourceSha256 = aggregateSourceDigest(runtimeFiles);
+
+  let archiveSha256;
+  try {
+    archiveSha256 = await sha256File(imageArchive);
+  } catch (error) {
+    fail('Unable to read the Runtime image archive.', 'IMAGE_ARCHIVE_UNAVAILABLE', { cause: error });
+  }
+  if (archiveSha256 !== imageArchiveSha256.toLowerCase()) {
+    fail('Runtime image archive does not match its pinned checksum.', 'IMAGE_ARCHIVE_MISMATCH');
+  }
+
+  try {
+    await execFileImpl(dockerBin, ['image', 'load', '--input', imageArchive], {
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  } catch (error) {
+    fail('Docker failed to load the Runtime image archive.', 'IMAGE_LOAD_FAILED', { cause: error });
+  }
+
+  let inspect;
+  try {
+    inspect = await execFileImpl(dockerBin, ['image', 'inspect', expectedImageId], {
+      encoding: 'utf8',
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch (error) {
+    fail('Unable to inspect the loaded Runtime image.', 'IMAGE_INSPECT_FAILED', { cause: error });
+  }
+  const image = parseImageInspect(inspect.stdout, runtimeSourceSha256, {
+    expectedImageId,
+    expectedArchitecture,
+  });
+
+  try {
+    await execFileImpl(dockerBin, ['tag', image, tag], {
+      encoding: 'utf8',
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch (error) {
+    fail('Unable to tag the verified Runtime image.', 'IMAGE_TAG_FAILED', { cause: error });
+  }
+
+  const pin = await persistImagePin(outputPin, {
+    version: IMAGE_PIN_VERSION,
+    image,
+    sourceSha256: runtimeSourceSha256,
+  });
+  return Object.freeze({
+    ...pin,
+    gitCommit: manifest.gitCommit,
+    tag,
+    architecture: expectedArchitecture,
   });
 }
 
